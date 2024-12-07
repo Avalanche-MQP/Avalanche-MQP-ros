@@ -26,7 +26,7 @@ def unsigned_to_signed(d):
 class drone_ros():
     def __init__(self):
         self.current_state = State()
-        self.target_heading = PoseStamped() # Drone Target Heading from DevKit
+        self.target_heading = PoseStamped()
         self.current_pos = PoseStamped()
 
         rospy.init_node("offb_node_py")
@@ -39,9 +39,8 @@ class drone_ros():
 
         self.local_vel_pub = rospy.Publisher("mavros/setpoint_velocity/cmd_vel", TwistStamped, queue_size=10)
   
-        # Where DevKit heading data is received from as DevKit type
-        #self.heading_sub = rospy.Subscriber("mavros/avalanche_beacon", AvalancheBeacon, callback = self.convert_heading, queue_size=10)
-        self.velocity_sub = rospy.Subscriber("mavros/avalanche_beacon", AvalancheBeacon, callback = self.convert_velocity, queue_size=10)
+        # Where DevKit heading data is received from as AvalancheBeacon type
+        #self.velocity_sub = rospy.Subscriber("mavros/avalanche_beacon", AvalancheBeacon, callback = self.convert_velocity, queue_size=10)
         
         rospy.wait_for_service("/mavros/cmd/arming")
         self.arming_client = rospy.ServiceProxy("mavros/cmd/arming", CommandBool)
@@ -68,29 +67,7 @@ class drone_ros():
         
         while(not rospy.is_shutdown() and not self.current_state.connected):
             self.rate.sleep()
-            # rospy.loginfo('Waiting for connection...')
         
-    def set_initial_heading(self):
-        """
-        This is an iniziation function for the sole purpose of making the 
-        drone hover before getting readings and updating flight path. 
-        """
-    
-        # Initially hover
-        self.set_hover()
-        
-        # Send a few setpoints before starting
-        rospy.loginfo("Start Liftoff")
-        
-        for i in range(100):
-            if(rospy.is_shutdown()):
-                break
-
-            self.local_pos_pub.publish(self.target_heading)
-            self.rate.sleep()
-        
-        rospy.loginfo("Stop Liftoff")
-
     def state_callback(self, msg):
         """
         This figures out the MODE of the drone.
@@ -107,48 +84,6 @@ class drone_ros():
         pose.pose.position.y = y
         pose.pose.position.z = z
         return pose
-        
-    def convert_heading(self, msg):
-        """
-        Function that takes in DevKit message and converts it to PoseStamped.
-        """
-        
-        relative_pos = self.current_pos
-        rospy.loginfo(relative_pos)
-
-        (_, _, yaw) = euler_from_quaternion([relative_pos.pose.orientation.x, relative_pos.pose.orientation.y, relative_pos.pose.orientation.z, relative_pos.pose.orientation.w])
-
-        converted_heading = PoseStamped()
-
-        pieps_range = msg.range / 10
-        pieps_direction_t = msg.direction
-
-        # PIEPS uses -5 -> 5 to indicate range of rotation, this generalizes the numbers to a degree and either positive and negative
-        relative_range = 0
-        if abs(pieps_direction_t) == 1:
-            relative_range = 0
-        elif abs(pieps_direction_t) == 2:
-            relative_range = (30 + 20) / 2
-        elif abs(pieps_direction_t) == 3:
-            relative_range = (40 + 30) / 2
-        elif abs(pieps_direction_t) == 4:
-            relative_range = (50 + 40) / 2
-        elif abs(pieps_direction_t) == 5:
-            relative_range = 50
-
-        if pieps_direction_t > 0:
-            relative_range = relative_range + -1
-
-        # add initial rotation for calcuation
-        relative_range += yaw
-
-        converted_heading.pose.position.x = relative_pos.pose.position.x + pieps_range * math.cos(relative_range)
-        converted_heading.pose.position.y = relative_pos.pose.position.y + pieps_range * math.sin(relative_range)
-        converted_heading.pose.position.z = relative_pos.pose.position.z
-
-        rospy.loginfo(converted_heading)
-
-        self.target_heading = converted_heading
 
     def convert_velocity(self, msg):
         self.beacon_ts = rospy.get_time()
@@ -187,6 +122,14 @@ class drone_ros():
     def set_hover(self):
         self.target_heading = self.new_heading(self.target_heading, 0, 0, 2)
 
+        # Send a few setpoints before starting
+        for _ in range(100):
+            if(rospy.is_shutdown()):
+                break
+
+            self.local_pos_pub.publish(self.target_heading)
+            self.rate.sleep()
+
     def record_position(self, msg):
         self.current_pos = msg
         
@@ -201,38 +144,32 @@ class drone_ros():
         self.last_req = rospy.Time.now()
         self.change_heading_interval = rospy.Time.now()
         self.change_heading = True
+        self.offboard_disabled = True
 
         while(not rospy.is_shutdown()):
             # Waits until OFFBOARD is enabled to continue
-            if(self.current_state.mode != "OFFBOARD"):
+            if(self.current_state.mode != "OFFBOARD" and self.offboard_disabled):
                 # print('waiting for offboard')
                 if(self.set_mode_client.call(self.offb_set_mode).mode_sent == True):
                     rospy.loginfo("OFFBOARD enabled")
+                    self.offboard_disabled = False
+                    rospy.loginfo(self.offboard_disabled)
 
                 self.last_req = rospy.Time.now()
             else:
                 # Waiting for the drone to finish arming to continue
-                # print('waiting for arm')
-                # print(f'armed?: {self.current_state.armed}')
                 if(not self.current_state.armed):
                     if(self.arming_client.call(self.arm_cmd).success == True):
                         
                         rospy.loginfo("Vehicle armed")
-                        self.set_initial_heading()
+                        self.set_hover()
 
                     self.last_req = rospy.Time.now()
 
-            # rospy.loginfo(dr.target_heading)
-
-            if rospy.get_time() < self.beacon_ts + 5: #self.new_message
-                self.local_vel_pub.publish(self.target_twist)
-            else:
-                self.current_pos.pose.position.z = 2
-                self.local_pos_pub.publish(self.current_pos) # Sends current target heading to the drone
-            
-            # After a certain delay, we change the heading (not looped yet)
-            # if(rospy.Time.now() - self.change_heading_interval > rospy.Duration(40.0) and self.change_heading):
-            #     self.change_heading = False
+            # if rospy.get_time() < self.beacon_ts + 5: #self.new_message
+            #     self.local_vel_pub.publish(self.target_twist)
+            # else:
+            self.local_pos_pub.publish(self.target_heading) # Sends current target heading to the drone
 
             self.rate.sleep()
 
