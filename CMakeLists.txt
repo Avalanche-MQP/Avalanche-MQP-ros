@@ -9,8 +9,8 @@ project(offboard_py)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   rospy
-  std_msgs
   message_generation
+  std_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -46,10 +46,10 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * uncomment the generate_messages entry below
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
-# Generate messages in the 'msg' folder
- add_message_files(
-   FILES
-   DevKit.msg
+## Generate messages in the 'msg' folder
+add_message_files(
+  FILES
+  DevKit.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -66,10 +66,10 @@ find_package(catkin REQUIRED COMPONENTS
 #   Action2.action
 # )
 
-# Generate added messages and services with any dependencies listed here
+## Generate added messages and services with any dependencies listed here
 generate_messages(
-   DEPENDENCIES
-   std_msgs  # Or other packages containing msgs
+  DEPENDENCIES
+  std_msgs  # Or other packages containing msgs
 )
 
 ################################################
@@ -156,12 +156,12 @@ include_directories(
 # all install targets should use catkin DESTINATION variables
 # See http://ros.org/doc/api/catkin/html/adv_user_guide/variables.html
 
-# Mark executable scripts (Python etc.) for installation
-# in contrast to setup.py, you can choose the destination
- catkin_install_python(PROGRAMS
-   scripts/offb_node.py
-   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
- )
+## Mark executable scripts (Python etc.) for installation
+## in contrast to setup.py, you can choose the destination
+catkin_install_python(PROGRAMS
+  scripts/offb_node.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 ## Mark executables for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html

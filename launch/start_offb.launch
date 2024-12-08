@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+	<!-- Include the MAVROS node with SITL and Gazebo -->
+	<!-- <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+		<arg name="fcu_url" value="/dev/serial/by-id/usb-FTDI_FT231X_USB_UART_DU0D53DR-if00-port0"/>
+		<arg name="fcu_url" value=""/>
+	</include> -->
+
+	<!-- Launch just mavros -->
+	<include file="$(find mavros)/launch/px4.launch">
+		<!-- <arg name="fcu_url" value="udp://0.0.0.0:14550@"/> -->
+		<arg name="fcu_url" value="/dev/serial/by-id/usb-FTDI_FT231X_USB_UART_DU0D53DR-if00-port0"/>
+		<arg name="log_output" value="log"/>
+	</include>
+
+	<!-- Our node to control the drone -->
+	<node pkg="offboard_py" type="offb_node.py" name="offb_node_py" required="true" output="screen" />
+</launch>

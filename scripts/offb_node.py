@@ -64,8 +64,8 @@ class drone_ros():
         self.beacon_ts = rospy.get_time()
 
         # Wait for Flight Controller connection
-        
         while(not rospy.is_shutdown() and not self.current_state.connected):
+            print('waaaaiiiting is the hardest part')
             self.rate.sleep()
         
     def state_callback(self, msg):
@@ -134,6 +134,7 @@ class drone_ros():
         self.current_pos = msg
         
     def run(self):
+        rospy.loginfo('run starting')
         # Sets drone to OFFBOARD mode for autonomous control
         self.offb_set_mode = SetModeRequest()
         self.offb_set_mode.custom_mode = 'OFFBOARD'
@@ -146,10 +147,12 @@ class drone_ros():
         self.change_heading = True
         self.offboard_disabled = True
 
+        rospy.loginfo('Entering the while loop')
         while(not rospy.is_shutdown()):
             # Waits until OFFBOARD is enabled to continue
+            self.set_hover()
             if(self.current_state.mode != "OFFBOARD" and self.offboard_disabled):
-                # print('waiting for offboard')
+                print('waiting for offboard')
                 if(self.set_mode_client.call(self.offb_set_mode).mode_sent == True):
                     rospy.loginfo("OFFBOARD enabled")
                     self.offboard_disabled = False
@@ -158,12 +161,16 @@ class drone_ros():
                 self.last_req = rospy.Time.now()
             else:
                 # Waiting for the drone to finish arming to continue
+                print('waiting for arm')
                 if(not self.current_state.armed):
+                    print('arming')
+                    # self.set_hover()
                     if(self.arming_client.call(self.arm_cmd).success == True):
                         
                         rospy.loginfo("Vehicle armed")
-                        self.set_hover()
-
+                        # self.set_hover()
+                    else:
+                        print('arm failed :sadge:')
                     self.last_req = rospy.Time.now()
 
             # if rospy.get_time() < self.beacon_ts + 5: #self.new_message
@@ -176,4 +183,5 @@ class drone_ros():
 
 if __name__ == '__main__':
     drone = drone_ros()
+    rospy.loginfo('in between')
     drone.run()
