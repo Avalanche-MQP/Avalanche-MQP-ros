@@ -65,7 +65,6 @@ class drone_ros():
 
         # Wait for Flight Controller connection
         while(not rospy.is_shutdown() and not self.current_state.connected):
-            print('waaaaiiiting is the hardest part')
             self.rate.sleep()
         
     def state_callback(self, msg):
@@ -89,7 +88,6 @@ class drone_ros():
         self.beacon_ts = rospy.get_time()
         pieps_range = (float)(msg.range) / 10.0
         pieps_direction_t = unsigned_to_signed(msg.direction)
-
 
         # PIEPS uses -5 -> 5 to indicate range of rotation, this generalizes the numbers to a degree and either positive and negative
         relative_range = 0
@@ -120,7 +118,8 @@ class drone_ros():
         self.target_twist = target_twist
 
     def set_hover(self):
-        self.target_heading = self.new_heading(self.target_heading, 0, 0, 2)
+        self.target_heading = self.new_heading(self.target_heading, 0, 0, self.current_pos.pose.position.x + 2)
+        rospy.loginfo(self.target_heading)
 
         # Send a few setpoints before starting
         for _ in range(100):
@@ -134,7 +133,6 @@ class drone_ros():
         self.current_pos = msg
         
     def run(self):
-        rospy.loginfo('run starting')
         # Sets drone to OFFBOARD mode for autonomous control
         self.offb_set_mode = SetModeRequest()
         self.offb_set_mode.custom_mode = 'OFFBOARD'
@@ -147,31 +145,24 @@ class drone_ros():
         self.change_heading = True
         self.offboard_disabled = True
 
-        rospy.loginfo('Entering the while loop')
+        # Send initial setpoint
+        self.set_hover()
+
         while(not rospy.is_shutdown()):
-            # Waits until OFFBOARD is enabled to continue
-            self.set_hover()
+            # Waits until OFFBOARD is enabled to continu
             if(self.current_state.mode != "OFFBOARD" and self.offboard_disabled):
                 print('waiting for offboard')
                 if(self.set_mode_client.call(self.offb_set_mode).mode_sent == True):
                     rospy.loginfo("OFFBOARD enabled")
                     self.offboard_disabled = False
-                    rospy.loginfo(self.offboard_disabled)
-
-                self.last_req = rospy.Time.now()
+                    self.last_req = rospy.Time.now()
             else:
                 # Waiting for the drone to finish arming to continue
-                print('waiting for arm')
                 if(not self.current_state.armed):
-                    print('arming')
-                    # self.set_hover()
                     if(self.arming_client.call(self.arm_cmd).success == True):
-                        
                         rospy.loginfo("Vehicle armed")
-                        # self.set_hover()
                     else:
-                        print('arm failed :sadge:')
-                    self.last_req = rospy.Time.now()
+                        self.last_req = rospy.Time.now()
 
             # if rospy.get_time() < self.beacon_ts + 5: #self.new_message
             #     self.local_vel_pub.publish(self.target_twist)
@@ -183,5 +174,5 @@ class drone_ros():
 
 if __name__ == '__main__':
     drone = drone_ros()
-    rospy.loginfo('in between')
     drone.run()
+
