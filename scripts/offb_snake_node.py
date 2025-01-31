@@ -135,7 +135,7 @@ class drone_ros():
         self.local_vel_pub.publish(target_twist)
         
     def check_signal(self, msg):
-        if msg.range >= 0:
+        if msg.range > 0:
             self.signal = True
     
         
@@ -198,6 +198,9 @@ class drone_ros():
                         initial_y = current_distance_y
                         self.flying_up = True
             else:
+                if self.signal:
+                    self.target_heading.pose.position.x = self.current_pos.pose.position.x
+                    self.target_heading.pose.position.y = self.current_pos.pose.position.y
                 self.local_pos_pub.publish(self.target_heading)
             self.rate.sleep()
 
