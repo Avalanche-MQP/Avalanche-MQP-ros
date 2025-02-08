@@ -152,7 +152,7 @@ class drone_ros():
 
         initial_y = 0
 
-        self.set_horizontal_velocity(1)
+        # self.set_horizontal_velocity(1)
 
         while(not rospy.is_shutdown()):
             # Waits until OFFBOARD is enabled to continue
