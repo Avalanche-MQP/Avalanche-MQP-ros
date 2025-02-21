@@ -8,6 +8,8 @@ from tf.listener import TransformListener
 STALE_BEACON_TIME = 5  # Most elapsed time to allow to follow a beacon message
 LINEAR_SPEED = 1 # Max allowable linear speed
 ANGULAR_SPEED = np.deg2rad(10)  # Max allowable angular speed
+REVERSAL_TIMEOUT = 10  # seconds; how long to try a new trajectory
+FOUND_THRESH = 10  # decimeters; how close to beacon to say found
 
 class PhaseOneController:
     def __init__(self):
@@ -18,6 +20,8 @@ class PhaseOneController:
         self.last_beacon_msg: AvalancheBeacon = None
         self.last_beacon_ts: float = None
         self.found_beacon = False
+        self.in_reversal = False
+        self.last_reverasl_end = None
 
         self.state_sub = rospy.Subscriber("mavros/state", State, callback = self.state_callback)
 
@@ -46,24 +50,46 @@ class PhaseOneController:
         self.current_pos = msg
 
     def handle_beacon(self, msg: AvalancheBeacon):
-        if msg.range > 0:
-            self.last_beacon_ts = rospy.get_time()
-            self.last_beacon_msg = msg
-
+        if msg.range > 0 and not self.in_reversal:
+            self.in_reversal = self.detect_reversal(msg)
+            if self.in_reversal:
+                self.reversal()
+            else:
+                self.last_beacon_ts = rospy.get_time()
+                self.last_beacon_msg = msg
+        # if msg.range > 0:
+        #         self.last_beacon_ts = rospy.get_time()
+        #         self.last_beacon_msg = msg
+            
     def detect_reversal(self, msg: AvalancheBeacon):
         '''Detects if the drone should turn around to get there faster'''
         # TODO: Make this way more robust
-        pass
+        if self.hover_level and self.last_beacon_msg and msg.range > self.last_beacon_msg.range + 5 and \
+            (not self.last_reverasl_end or rospy.get_time() > self.last_reverasl_end + REVERSAL_TIMEOUT):
+            return True
+        
+    def reversal(self):
+        '''Block for a little bit and turn the drone around'''
+        print('@@@@@@@@@@@@@@ REVERSAL @@@@@@@@@@@@@@@@@@@@@@')
+        t0 = rospy.get_time()
+        time_to_turn = np.pi / ANGULAR_SPEED
+        while rospy.get_time() < t0 + time_to_turn:
+            vspeed = (self.hover_level - self.current_pos.pose.position.z) * 0.5
+            self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(0, 0, vspeed), Vector3(0, 0, ANGULAR_SPEED)))
+        print('@@@@@@@ EXIT REVERSAL @@@@@@@@@')
+        self.last_reverasl_end = rospy.get_time()
+        self.in_reversal = False
             
     def follow_arrow(self):
         '''Follows beacon with velocity control'''
         # If very close, stop
-        if self.last_beacon_msg.range < 30:
+        if self.last_beacon_msg.range < FOUND_THRESH:
             self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(0, 0, 0), Vector3(0, 0, 0)))
             self.found_beacon = True
             print("FOUND!!!!")
+            return
+        
         # Go slower if closer to beacon
-        # speed = np.clip(LINEAR_SPEED * (self.last_beacon_msg.range / 50), 0.1, 1)
         speed = LINEAR_SPEED
         vspeed = (self.hover_level - self.current_pos.pose.position.z) * 0.5
         # Check if time since last beacon reading is reasonable
