@@ -1,12 +1,13 @@
 #! /usr/bin/env python3
 import rospy
 from mavros_msgs.msg import State, AvalancheBeacon
-from geometry_msgs.msg import PoseStamped, TwistStamped, Pose, Point, Quaternion, Twist, Vector3
+from geometry_msgs.msg import PoseStamped, TwistStamped, Pose, Point, Quaternion, Twist, Vector3, Vector3Stamped
 import numpy as np
+from tf.listener import TransformListener
 
 STALE_BEACON_TIME = 5  # Most elapsed time to allow to follow a beacon message
 LINEAR_SPEED = 1 # Max allowable linear speed
-ANGULAR_SPEED = np.deg2rad(15)  # Max allowable angular speed
+ANGULAR_SPEED = np.deg2rad(10)  # Max allowable angular speed
 
 class PhaseOneController:
     def __init__(self):
@@ -19,6 +20,8 @@ class PhaseOneController:
         self.found_beacon = False
 
         self.state_sub = rospy.Subscriber("mavros/state", State, callback = self.state_callback)
+
+        self.tl = TransformListener()
 
         # Where target_heading data is published as PoseStamped (x, y, z)
         self.local_pos_pub = rospy.Publisher("mavros/setpoint_position/local", PoseStamped, queue_size=10)
@@ -46,40 +49,65 @@ class PhaseOneController:
         if msg.range > 0:
             self.last_beacon_ts = rospy.get_time()
             self.last_beacon_msg = msg
+
+    def detect_reversal(self, msg: AvalancheBeacon):
+        '''Detects if the drone should turn around to get there faster'''
+        # TODO: Make this way more robust
+        pass
             
     def follow_arrow(self):
         '''Follows beacon with velocity control'''
         # If very close, stop
         if self.last_beacon_msg.range < 30:
             self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(0, 0, 0), Vector3(0, 0, 0)))
+            self.found_beacon = True
             print("FOUND!!!!")
+        # Go slower if closer to beacon
+        # speed = np.clip(LINEAR_SPEED * (self.last_beacon_msg.range / 50), 0.1, 1)
+        speed = LINEAR_SPEED
+        vspeed = (self.hover_level - self.current_pos.pose.position.z) * 0.5
         # Check if time since last beacon reading is reasonable
         if rospy.get_time() < self.last_beacon_ts + STALE_BEACON_TIME:
             # Translate last beacon arrow into a direction
             print(f'corrected for sign: {np.int8(self.last_beacon_msg.direction)}')
-            sn = np.sign(np.int8(self.last_beacon_msg.direction))
+            sn = np.sign(np.int8(self.last_beacon_msg.direction)) 
             if abs(np.int8(self.last_beacon_msg.direction)) == 1:
-                self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(LINEAR_SPEED, 0, 0), Vector3(0, 0, 0)))
+                angle = 0
+                # tw = TwistStamped(rospy.Header(frame_id='base_link'), Twist(Vector3(speed, 0, vspeed), Vector3(0, 0, 0)))
+                # self.local_vel_pub.publish(rospy.Header(frame_id='base_link'), Twist(Vector3(speed, 0, vspeed), Vector3(0, 0, 0)))
             elif abs(np.int8(self.last_beacon_msg.direction)) == 2:
                 angle = sn * np.deg2rad(25)
-                self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(LINEAR_SPEED*np.cos(angle), LINEAR_SPEED*np.sin(angle), 0), 
-                                                                               Vector3(sn * ANGULAR_SPEED, 0, 0)))
+                # tw = TwistStamped(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                             Vector3(0, 0, sn * ANGULAR_SPEED)))
+                # # self.local_vel_pub.publish(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
             elif abs(np.int8(self.last_beacon_msg.direction)) == 3:
                 angle = sn * np.deg2rad(35)
-                self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(LINEAR_SPEED*np.cos(angle), LINEAR_SPEED*np.sin(angle), 0), 
-                                                                               Vector3(sn * ANGULAR_SPEED, 0, 0)))
+                # tw = TwistStamped(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
+                # # self.local_vel_pub.publish(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
             elif abs(np.int8(self.last_beacon_msg.direction)) == 4:
                 angle = sn * np.deg2rad(45)
-                self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(LINEAR_SPEED*np.cos(angle), LINEAR_SPEED*np.sin(angle), 0), 
-                                                                               Vector3(sn * ANGULAR_SPEED, 0, 0)))
+                # tw = TwistStamped(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
+                # self.local_vel_pub.publish(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
             else:
                 angle = sn * np.deg2rad(50)
-                self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(LINEAR_SPEED*np.cos(angle), LINEAR_SPEED*np.sin(angle), 0), 
-                                                                               Vector3(sn * ANGULAR_SPEED, 0, 0)))
+                # tw = TwistStamped(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
+                # self.local_vel_pub.publish(rospy.Header(frame_id='base_link'), Twist(Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed), 
+                #                                                                Vector3(0, 0, sn * ANGULAR_SPEED)))
+            vec = Vector3Stamped(rospy.Header(frame_id='base_link'), Vector3(speed*np.cos(angle), speed*np.sin(angle), vspeed))
+            vec = self.tl.transformVector3('map', vec)
+            tw = TwistStamped(rospy.Header(frame_id='base_link'), Twist(vec.vector, 
+                                                                        Vector3(0, 0, sn * ANGULAR_SPEED)))
+            self.local_vel_pub.publish(tw)
 
 
         else:  # If reading is stale, stay still (TODO: Recovery behavior)
-            self.local_vel_pub.publish(rospy.Header(frame_id='map'), Twist(Vector3(0, 0, 0), Vector3(0, 0, 0)))
+            self.local_vel_pub.publish(rospy.Header(frame_id='base_link'), Twist(Vector3(0, 0, vspeed), Vector3(0, 0, 0)))
     
     def run(self):
         spinlock_rate = rospy.Rate(2)
