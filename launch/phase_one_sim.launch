@@ -3,6 +3,8 @@
 	<!-- Launch on SIM -->
 	<include file="$(find px4)/launch/mavros_posix_sitl.launch">
 	</include>
+    <node pkg="beacon-sim" type="TargetSim.py" name="target_sim"/>
+    <node pkg="beacon-sim" type="ReceiverSim.py" name="receiver_sim" output="screen"/>
 
 	<!-- Launch on real drone -->
 	<!-- <include file="$(find mavros)/launch/px4.launch">
