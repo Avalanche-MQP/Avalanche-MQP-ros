@@ -31,16 +31,16 @@ class drone_ros():
 
         rospy.init_node("offb_node_py")
 
-        self.state_sub = rospy.Subscriber("mavros/state", State, callback = self.state_callback, queue_size=1)
+        self.state_sub = rospy.Subscriber("mavros/state", State, callback = self.state_callback)
 
         # Where target_heading data is published as PoseStamped (x, y, z)
         self.local_pos_pub = rospy.Publisher("mavros/setpoint_position/local", PoseStamped, queue_size=10)
         self.local_pos_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, callback = self.record_position, queue_size=10)
 
-        self.local_vel_pub = rospy.Publisher("mavros/setpoint_velocity/cmd_vel", TwistStamped, queue_size=1)
+        self.local_vel_pub = rospy.Publisher("mavros/setpoint_velocity/cmd_vel", TwistStamped, queue_size=10)
   
         # Where DevKit heading data is received from as AvalancheBeacon type
-        self.velocity_sub = rospy.Subscriber("mavros/avalanche_beacon", AvalancheBeacon, callback = self.check_signal, queue_size=1)
+        self.velocity_sub = rospy.Subscriber("mavros/avalanche_beacon", AvalancheBeacon, callback = self.check_signal, queue_size=10)
         
         rospy.wait_for_service("/mavros/cmd/arming")
         self.arming_client = rospy.ServiceProxy("mavros/cmd/arming", CommandBool)
@@ -60,7 +60,7 @@ class drone_ros():
         self.change_heading = True
         self.new_message = False
 
-        self.search_size = (5, 12) # (x,y) in meters
+        self.search_size = (10, 24) # (x,y) in meters
         self.search_range = 1 # in meter
 
         self.no_signal = True
@@ -152,78 +152,30 @@ class drone_ros():
         rospy.loginfo(self.init_z)
 
         # Send initial setpoint
-        self.set_hover()
+        # self.set_hover()
 
         initial_y = 0
 
         # self.set_horizontal_velocity(1)
 
-        while(not rospy.is_shutdown()):
-            spinlock_rate = rospy.Rate(2)
-            # Spin until drone is armed by something else:
-            while not self.current_state.armed and not rospy.is_shutdown():
-                spinlock_rate.sleep()
-                rospy.loginfo('Waiting for arm...')
-            rospy.loginfo('@@@@@@ ARMED @@@@@@')
+        # while(not rospy.is_shutdown()):
+        #     # Waits until OFFBOARD is enabled to continue
+        #     if(self.current_state.mode != "OFFBOARD" and self.offboard_disabled):
+        #         print('waiting for offboard')
+        #         if(self.set_mode_client.call(self.offb_set_mode).mode_sent == True):
+        #             rospy.loginfo("OFFBOARD enabled")
+        #             self.offboard_disabled = False
+        #             self.last_req = rospy.Time.now()
+        #     else:
+        #         # Waiting for the drone to finish arming to continue
+        #         if(not self.current_state.armed):
+        #             if(self.arming_client.call(self.arm_cmd).success == True):
+        #                 rospy.loginfo("Vehicle armed")
+        #             else:
+        #                 self.last_req = rospy.Time.now()
 
-            # # Spin until drone is put into position mode
-            # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-            # UNCOMMENT THIS ON REAL DRONE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            # YOU ABSOLUTE DOOFUS
-            # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-            # while not self.current_state.mode == self.current_state.MODE_PX4_POSITION:
-            #     spinlock_rate.sleep()
-            #     rospy.loginfo(f'Waiting for position mode...    current mode: {self.current_state.mode}')
-            # rospy.loginfo('@@@@@@ In position mode @@@@@@')
-
-            # Spin until drone put into offboard mode
-            while not self.current_state.mode == self.current_state.MODE_PX4_OFFBOARD and not rospy.is_shutdown():
-                spinlock_rate.sleep()
-                rospy.loginfo(f'Waiting for offboard mode... current mode: {self.current_state.mode}')
-                self.local_pos_pub.publish(self.current_pos)
-                self.last_req = rospy.Time.now()
-            rospy.loginfo('@@@@@@ WARNING: OFFBOARD MODE ENGAGED @@@@@@')
-
-            # while rospy.get_time() < self.last_req + 10:
-            #     rospy.loginfo('hovering')
-
-            if(rospy.Time.now() - self.last_req) > rospy.Duration(10.0):
-                self.hovered = True
-
-            if self.hovered and not self.signal:
-                # rospy.loginfo('----------------------snaking-------------------------')
-                current_distance_x = self.current_pos.pose.position.x
-                current_distance_y = self.current_pos.pose.position.y
-                
-                if self.flying_up:
-                    self.fly_y(current_distance_y + self.search_range)
-                    if (current_distance_y - initial_y) > 2 * self.search_range:
-                        rospy.loginfo("Snake turn")
-                        if(self.fly_to_right):
-                            self.fly_x(current_distance_x + self.search_range/2)
-                        else:
-                            self.fly_x(current_distance_x - self.search_range/2)
-                        self.fly_to_right = not (self.fly_to_right)
-                        self.flying_up = False
-                else:
-                    if(self.fly_to_right):
-                            self.fly_x(current_distance_x + self.search_range/2)
-                    else:
-                        self.fly_x(current_distance_x - self.search_range/2)
-                    if (self.fly_to_right and (self.search_size[0] - current_distance_x) < self.search_range) or (not self.fly_to_right and (current_distance_x < self.search_range)):
-                        rospy.loginfo("Snake up")
-                        self.fly_y(current_distance_y + self.search_range)
-                        initial_y = current_distance_y
-                        self.flying_up = True
-            else:
-                if self.signal:
-                    self.target_heading.pose.position.x = self.current_pos.pose.position.x
-                    self.target_heading.pose.position.y = self.current_pos.pose.position.y
-                self.local_pos_pub.publish(self.target_heading)
-                rospy.loginfo('hoverin')
-                if self.last_req:
-                    rospy.loginfo((rospy.Time.now() - self.last_req).secs)
-            self.rate.sleep()
+        # spinlock until in pos mode
+        while ((not self.current_state == ))
 
 if __name__ == '__main__':
     drone = drone_ros()

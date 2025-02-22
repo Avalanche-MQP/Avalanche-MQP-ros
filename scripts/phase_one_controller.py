@@ -138,7 +138,7 @@ class PhaseOneController:
     def run(self):
         spinlock_rate = rospy.Rate(2)
         # Spin until drone is armed by something else:
-        while not self.current_state.armed:
+        while not self.current_state.armed and not rospy.is_shutdown():
             spinlock_rate.sleep()
             rospy.loginfo('Waiting for arm...')
         rospy.loginfo('@@@@@@ ARMED @@@@@@')
@@ -154,19 +154,18 @@ class PhaseOneController:
         # rospy.loginfo('@@@@@@ In position mode @@@@@@')
 
         # Spin until drone put into offboard mode
-        while not self.current_state.mode == self.current_state.MODE_PX4_OFFBOARD:
+        while not self.current_state.mode == self.current_state.MODE_PX4_OFFBOARD and not rospy.is_shutdown():
             spinlock_rate.sleep()
             rospy.loginfo(f'Waiting for offboard mode... current mode: {self.current_state.mode}')
             self.local_pos_pub.publish(self.current_pos)
         rospy.loginfo('@@@@@@ WARNING: OFFBOARD MODE ENGAGED @@@@@@')
 
-        self.hover_level = self.current_pos.pose.position.z + 2  # @@@@@@@@@@@@@@@ COMMENT ON REAL DRONE!!!
+        self.hover_level = self.current_pos.pose.position.z  #  + 2  # @@@@@@@@@@@@@@@ COMMENT ON REAL DRONE!!!
         t = rospy.get_time()
         while t > rospy.get_time() - 5:  # COMMENT OUT
             self.local_pos_pub.publish(self.current_pos.header, Pose(Point(self.current_pos.pose.position.x, 
                                                                            self.current_pos.pose.position.y,
                                                                            self.hover_level), self.current_pos.pose.orientation))
-            spinlock_rate.sleep()
 
         while not rospy.is_shutdown() and not self.found_beacon:
             if self.last_beacon_msg:
