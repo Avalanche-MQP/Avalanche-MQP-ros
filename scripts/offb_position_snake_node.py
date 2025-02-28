@@ -60,8 +60,8 @@ class drone_ros():
         self.change_heading = True
         self.new_message = False
 
-        self.search_size = (5, 12) # (x,y) in meters
-        self.search_range = 1 # in meter
+        self.search_size = (12, 24) # (x,y) in meters
+        self.search_range = 2.5 # in meter
 
         self.no_signal = True
         self.fly_to_right = True
