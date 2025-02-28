@@ -6,10 +6,11 @@
 
 	<!-- Launch on real drone -->
 	<include file="$(find mavros)/launch/px4.launch">
-		<arg name="fcu_url" value="udp://0.0.0.0:14550@"/>
+		<!-- <arg name="fcu_url" value="udp://0.0.0.0:14550@"/> -->
+		<arg name="fcu_url" value="/dev/ttyUSB0"/>
 		<arg name="log_output" value="log"/>
 	</include>
 
 	<!-- Our node to control the drone -->
-	<node pkg="offboard_py" type="offb_position_snake_node.py" name="offb_position_snake_node" required="true" output="screen" />
+	<!-- <node pkg="offboard_py" type="offb_position_snake_node.py" name="offb_position_snake_node" required="true" output="screen" /> -->
 </launch>
