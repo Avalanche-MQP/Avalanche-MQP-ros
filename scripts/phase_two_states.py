@@ -11,10 +11,13 @@ SAFE_ALTITUDE = 2.5  # m; minimum altitude to start offboard control
 STALE_BEACON_TIME = 5  # s; maximum time to use beacon data as a heading
 LINEAR_SPEED = 1  # m/s; linear velocity for beacon following
 ANGULAR_SPEED = np.deg2rad(10)  # s^-1; Max allowable angular speed
-FOUND_THRESH = 20  # decimeters; max distance to consider beacon found
+FOUND_THRESH = 40  # decimeters; max distance to consider beacon found
 SETPOINT_ALT = 3  # m; how far above ground to follow
 MONOTONY_FILTER_MAX = 5  # ul; how many consecutive increases before deciding to turn around
-TURN_AROUD_TIME = np.pi / ANGULAR_SPEED
+TURN_AROUD_TIME = np.pi / ANGULAR_SPEED  # s; How long to wait for about face turn
+TRAJ_TS = 0.05  # s; how large each time step is on trapezoidal trajectory
+TRAJ_ACC = 0.25  # m/s^2; how fast to accelerate in trapezoidal trajectory
+TRAJ_TOTAL_TIME = 7  # s; how long to take on the trapezoidal trajectory
 
 class WaitForTakeoff(smach.State):
     '''Waits for the user to takeoff and enter OFFBOARD mode'''
@@ -84,8 +87,8 @@ class CheckAltitude(smach.State):
 class WaitForBeacon(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['found_beacon', 'timeout'], 
-                             input_keys=['hover_pos', 'max_time'],
-                             output_keys=['beacon_data'])
+                             input_keys=['hover_pos', 'max_time', 'last_beacon_pos'],
+                             output_keys=['beacon_data', 'last_beacon_pos'])
         rospy.Subscriber('mavros/avalanche_beacon', 
                                            AvalancheBeacon, callback = self.handle_beacon, 
                                            queue_size=10)
@@ -94,25 +97,30 @@ class WaitForBeacon(smach.State):
         self.spin_rate = rospy.Rate(3)
     
     def handle_beacon(self, msg: AvalancheBeacon):
-        self.beacon_data = msg
+        if not (msg.direction == msg.range == 0):
+            self.beacon_data = msg
     
     def execute(self, ud):
         start_time = rospy.get_time()
+        self.beacon_data = None
         while rospy.get_time() < start_time + ud.max_time and not self.beacon_data:
             self.position_pub.publish(ud.hover_pos)
+            rospy.loginfo(f'waiting on beacon...  {rospy.get_time() - start_time}')
             self.spin_rate.sleep()
         if self.beacon_data:
             ud.beacon_data = self.beacon_data
             return 'found_beacon'
         else:
             ud.beacon_data = None
+            if 'last_beacon_pos' in ud.keys():
+                ud.last_beacon_pos = ud.last_beacon_pos
             return 'timeout'
 
 class FollowArrow(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['located_beacon', 'beacon_loss', 'distance_increase'], 
                              input_keys=['hover_pos', 'beacon_data'],
-                             output_keys=['last_beacon_data', 'last_beacon_pos', 'about_face_pos'])
+                             output_keys=['last_beacon_data', 'last_beacon_pos', 'hover_pos'])
         # Member variables
         self.last_beacon_time = rospy.get_time()
         self.beacon_data: AvalancheBeacon = None
@@ -127,7 +135,7 @@ class FollowArrow(smach.State):
         self.tl = TransformListener()
         rospy.Subscriber('mavros/avalanche_beacon', 
                                            AvalancheBeacon, callback = self.beacon_cb, 
-                                           queue_size=10)
+                                           queue_size=1)
         rospy.Subscriber('mavros/local_position/pose', PoseStamped, 
                          callback=self.pose_cb, queue_size=10)
         self.local_vel_pub = rospy.Publisher('mavros/setpoint_velocity/cmd_vel', 
@@ -169,7 +177,7 @@ class FollowArrow(smach.State):
         sn = np.sign(np.int8(msg.direction)) 
 
         # Get vertical speed (to avoid ground)
-        vspeed = (SETPOINT_ALT - self.pose.pose.position.z) * 0.5
+        vspeed = (SETPOINT_ALT - self.pose.pose.position.z) * 1
 
         # Convert direction from message to radians
         if abs(np.int8(msg.direction)) == 1:
@@ -202,18 +210,22 @@ class FollowArrow(smach.State):
             if self.is_beacon_timeout():
                 ud.last_beacon_data = self.beacon_data
                 ud.last_beacon_pos = self.last_beacon_pos
+                ud.hover_pos = self.pose
+                rospy.loginfo(f'LOST BEACON; last position: {self.last_beacon_pos} ')
                 return 'beacon_loss'
             elif self.is_beacon_found():
                 ud.last_beacon_data = self.beacon_data
                 ud.last_beacon_pos = self.last_beacon_pos
+                ud.hover_pos = self.pose
                 return 'located_beacon'
             elif self.is_distance_increasing():
-                ud.about_face_pos = self.pose
+                ud.hover_pos = self.pose
                 ud.last_beacon_data = self.beacon_data
                 return 'distance_increase'
             
             # Publish velocity aligning with arrow of beacon
             self.local_vel_pub.publish(self.velocity_vector)
+            self.spin_rate.sleep()
 
 class AboutFace(smach.State):
     '''Turn the drone about 180 degrees'''
@@ -240,17 +252,113 @@ class AboutFace(smach.State):
         start_time = rospy.get_time()
         # Rotate for as long as necessary at set speed
         while rospy.get_time() < start_time + TURN_AROUD_TIME and not rospy.is_shutdown():
-            vspeed = (SETPOINT_ALT - self.pose.pose.position.z) * 0.5  # Correct altitude
+            vspeed = (SETPOINT_ALT - self.pose.pose.position.z) * 1  # Correct altitude
             tw = TwistStamped(rospy.Header(frame_id='map'), Twist(Vector3(0, 0, vspeed), 
                                                                   Vector3(0, 0, ANGULAR_SPEED)))
             self.local_vel_pub.publish(tw)
         
         # See if we can still see the beacon
-        beacon_msg = rospy.wait_for_message('/mavros/avalanche_beacon', AvalancheBeacon, rospy.Duration(STALE_BEACON_TIME))
-        if not beacon_msg:  # If the beacon was lost after the turn, go to handle lost beacon state
+        try:
+            beacon_msg: AvalancheBeacon = rospy.wait_for_message('/mavros/avalanche_beacon', AvalancheBeacon, rospy.Duration(STALE_BEACON_TIME))
+        except rospy.exceptions.ROSException as e:  # Catch the timeout
+            ud.last_beacon_pos = self.pose
+            return 'lost_beacon'
+        
+        if not beacon_msg or beacon_msg.range == beacon_msg.direction == 0:  # If the beacon was lost after the turn, go to handle lost beacon state
+            ud.last_beacon_pos = self.pose
             return 'lost_beacon'
         else:
-            ud.beacon_data = beacon_msg
-            ud.hover_pos = self.pose
+            ud.last_beacon_data = beacon_msg
+            ud.last_beacon_pos = self.pose
             return 'finished_turning'
+
+class GoToPose(smach.State):
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['recovered_beacon', 'at_next_pose'], 
+                                input_keys=['hover_pos', 'beacon_data'],
+                                output_keys=['last_beacon_data', 'last_beacon_pos', 'hover_pos'])
+        self.pose: PoseStamped = None
+        self.beacon_data: AvalancheBeacon = None
+        self.last_beacon_pos: PoseStamped = None
+
+        # Publishers and Subscribers
+        self.tl = TransformListener()
+        rospy.Subscriber('mavros/avalanche_beacon', 
+                                           AvalancheBeacon, callback = self.beacon_cb, 
+                                           queue_size=1)
+        rospy.Subscriber('mavros/local_position/pose', PoseStamped, 
+                         callback=self.pose_cb, queue_size=10)
+        self.pose_pub = rospy.Publisher('mavros/setpoint_position/local', PoseStamped, queue_size=10)
         
+        self.spin_rate = rospy.Rate(20)
+
+    def beacon_cb(self, msg: AvalancheBeacon):
+        if not (msg.direction == msg.range and msg.range == 0):
+            self.beacon_data = msg
+            self.last_beacon_pos = self.pose  # Record last seen position
+    
+    def pose_cb(self, msg: PoseStamped):
+        self.pose = msg
+    
+    def execute(self, ud):
+        target_pose: PoseStamped = ud.hover_pos
+        start_pose: PoseStamped = rospy.wait_for_message('/mavros/local_position/pose', PoseStamped)
+        self.beacon_data = None
+        angle = np.arctan2(target_pose.pose.position.y - start_pose.pose.position.y,
+                           target_pose.pose.position.x - start_pose.pose.position.x)
+        # Specify trajectory
+        radius = np.linalg.norm(np.array([target_pose.pose.position.x - start_pose.pose.position.x,
+                                          target_pose.pose.position.y - start_pose.pose.position.y,
+                                          target_pose.pose.position.z - start_pose.pose.position.z]))
+        traj_gen = timed_trapezoidal_traj(0, radius, TRAJ_ACC, LINEAR_SPEED, TRAJ_TOTAL_TIME, TRAJ_TS)
+        
+        # Run through generated trajectory
+        # for pos in traj_gen:  # rate.sleep seems weird with for loops...
+        while not rospy.is_shutdown():
+            # Check if beacon is seen
+            if self.beacon_data:
+                ud.last_beacon_pos = self.pose
+                ud.last_beacon_data = self.beacon_data
+                rospy.loginfo(f'FOUND BEACON: {self.beacon_data}')
+                return 'recovered_beacon'
+            
+            # Attempt to generate a traj point
+            try:
+                pos = next(traj_gen)
+            except StopIteration:  # If traj is empty, leave the loop
+                break
+
+            next_pose = PoseStamped(start_pose.header, Pose(Point(start_pose.pose.position.x + pos * np.cos(angle),
+                                                                  start_pose.pose.position.y + pos * np.sin(angle),
+                                                                  SETPOINT_ALT),
+                                                            start_pose.pose.orientation))
+            radius = np.linalg.norm(np.array([target_pose.pose.position.x - start_pose.pose.position.x,
+                                          target_pose.pose.position.y - start_pose.pose.position.y,
+                                          target_pose.pose.position.z - start_pose.pose.position.z]))
+            rospy.loginfo(f'radius: {radius}')
+            self.pose_pub.publish(next_pose)
+            self.spin_rate.sleep()
+
+        # Check if beacon is seen
+        if self.beacon_data:
+            ud.last_beacon_pos = self.pose
+            ud.last_beacon_data = self.beacon_data
+            return 'recovered_beacon'
+        else:
+            ud.hover_pos = self.pose
+            return 'at_next_pose'
+            
+
+def timed_trapezoidal_traj(start, end, acc, max_vel, max_time, time_step):
+    '''Yields a trapezoidal trajectory with a strictly positive velocity'''
+    vel = 0
+    pos = start
+    for t in np.arange(0, max_time, time_step):
+        if abs(vel) < max_vel and 0.5 * vel * t < (end - start) / 2:
+            vel += acc * time_step
+        if abs(vel) > 0.1 and end - pos < (0.5 * vel * max_vel / acc):
+            vel -= acc * time_step
+        pos += time_step * vel
+        if pos > end:
+            return
+        yield pos
