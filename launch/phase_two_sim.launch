@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+	<!-- Launch on SIM -->
+	<include file="$(find px4)/launch/mavros_posix_sitl.launch">
+	</include>
+    <node pkg="beacon-sim" type="TargetSim.py" name="target_sim"/>
+    <node pkg="beacon-sim" type="ReceiverSim.py" name="receiver_sim" output="screen"/>
+
+	<!-- Launch on real drone -->
+	<!-- <include file="$(find mavros)/launch/px4.launch">
+		<arg name="fcu_url" value="udp://0.0.0.0:14550@"/>
+		<arg name="log_output" value="log"/>
+	</include> -->
+
+	<!-- Our node to control the drone -->
+	<node pkg="offboard_py" type="phase_two_smach.py" name="StateMachine" required="true" output="screen" />
+</launch>
