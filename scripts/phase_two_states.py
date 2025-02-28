@@ -13,6 +13,8 @@ LINEAR_SPEED = 1  # m/s; linear velocity for beacon following
 ANGULAR_SPEED = np.deg2rad(10)  # s^-1; Max allowable angular speed
 FOUND_THRESH = 20  # decimeters; max distance to consider beacon found
 SETPOINT_ALT = 3  # m; how far above ground to follow
+MONOTONY_FILTER_MAX = 5  # ul; how many consecutive increases before deciding to turn around
+TURN_AROUD_TIME = np.pi / ANGULAR_SPEED
 
 class WaitForTakeoff(smach.State):
     '''Waits for the user to takeoff and enter OFFBOARD mode'''
@@ -117,6 +119,7 @@ class FollowArrow(smach.State):
         self.last_beacon_pos: PoseStamped = None
         self.pose = None
         self.velocity_vector = None
+        self.monotony_filter = 0  # How many conscutive beacon range increases
 
         self.spin_rate = rospy.Rate(20)
 
@@ -131,6 +134,11 @@ class FollowArrow(smach.State):
                                              TwistStamped, queue_size=10)
     def beacon_cb(self, msg: AvalancheBeacon):
         if not (msg.direction == msg.range and msg.range == 0):
+            if self.beacon_data and msg.range > self.beacon_data.range:
+                self.monotony_filter += 1
+                rospy.loginfo(f'monotony filter: {self.monotony_filter}')
+            else:
+                self.monotony_filter = 0
             self.beacon_data = msg
             self.last_beacon_time = rospy.get_time()
             self.last_beacon_pos = self.pose  # Record last seen position
@@ -146,7 +154,11 @@ class FollowArrow(smach.State):
         return self.beacon_data.range <= FOUND_THRESH
     
     def is_distance_increasing(self):
-        return False  # TODO: this
+        if self.monotony_filter > MONOTONY_FILTER_MAX:
+            self.monotony_filter = 0  # Reset so doesn't retrigger
+            return True
+        else:
+            return False
     
     def calculate_velocity_vector(self, msg: AvalancheBeacon) -> TwistStamped:
         '''Calculates a velocity vector for a given beacon message'''
@@ -178,6 +190,7 @@ class FollowArrow(smach.State):
     def execute(self, ud):
         # Update member variables to state inputs
         self.beacon_cb(ud.beacon_data)
+        self.monotony_filter = 0
 
         # Follow the arrow until either:
         #   1. Beacon is found
@@ -196,7 +209,48 @@ class FollowArrow(smach.State):
                 return 'located_beacon'
             elif self.is_distance_increasing():
                 ud.about_face_pos = self.pose
+                ud.last_beacon_data = self.beacon_data
                 return 'distance_increase'
             
             # Publish velocity aligning with arrow of beacon
             self.local_vel_pub.publish(self.velocity_vector)
+
+class AboutFace(smach.State):
+    '''Turn the drone about 180 degrees'''
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['lost_beacon', 'finished_turning'], 
+                                input_keys=['hover_pos', 'beacon_data'],
+                                output_keys=['last_beacon_data', 'last_beacon_pos'])
+        self.pose: PoseStamped = None
+
+        # Publishers and Subscribers
+        self.tl = TransformListener()
+        self.local_vel_pub = rospy.Publisher('mavros/setpoint_velocity/cmd_vel', 
+                                             TwistStamped, queue_size=10)
+        rospy.Subscriber('mavros/local_position/pose', PoseStamped, 
+                         callback=self.pose_cb, queue_size=10)
+        self.spin_rate = rospy.Rate(20)
+    
+    def pose_cb(self, msg: PoseStamped):
+        self.pose = msg
+
+    def execute(self, ud):
+        # Wait for pose data
+        rospy.wait_for_message('/mavros/local_position/pose', PoseStamped)
+        start_time = rospy.get_time()
+        # Rotate for as long as necessary at set speed
+        while rospy.get_time() < start_time + TURN_AROUD_TIME and not rospy.is_shutdown():
+            vspeed = (SETPOINT_ALT - self.pose.pose.position.z) * 0.5  # Correct altitude
+            tw = TwistStamped(rospy.Header(frame_id='map'), Twist(Vector3(0, 0, vspeed), 
+                                                                  Vector3(0, 0, ANGULAR_SPEED)))
+            self.local_vel_pub.publish(tw)
+        
+        # See if we can still see the beacon
+        beacon_msg = rospy.wait_for_message('/mavros/avalanche_beacon', AvalancheBeacon, rospy.Duration(STALE_BEACON_TIME))
+        if not beacon_msg:  # If the beacon was lost after the turn, go to handle lost beacon state
+            return 'lost_beacon'
+        else:
+            ud.beacon_data = beacon_msg
+            ud.hover_pos = self.pose
+            return 'finished_turning'
+        

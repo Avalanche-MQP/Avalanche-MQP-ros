@@ -32,10 +32,13 @@ class PhaseTwoSmach:
             self.sm.add('FOLLOW_ARROW', phase_two_states.FollowArrow(),
                         transitions={'located_beacon': 'found',
                                      'beacon_loss' : 'not_found',
-                                     'distance_increase': 'not_found'},
+                                     'distance_increase': 'ABOUT_FACE'},
                         remapping={'last_beacon_data': 'beacon_data',
                                    'last_beacon_pos': 'hover_pos',
                                    'about_face_pos' : 'hover_pos'})
+            self.sm.add('ABOUT_FACE', phase_two_states.AboutFace(),
+                        transitions={'lost_beacon': 'not_found',
+                                     'finished_turning': 'FOLLOW_ARROW'})
             
         self.sis = smach_ros.IntrospectionServer('sis_server', self.sm, '/SM_ROOT')
         self.sis.start()
