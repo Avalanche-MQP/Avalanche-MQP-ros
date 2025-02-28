@@ -25,10 +25,17 @@ class PhaseTwoSmach:
                                 'unsafe_altitude': 'not_found'})
             # TODO: Replace this with snake
             self.sm.add('WAIT_FOR_BEACON', phase_two_states.WaitForBeacon(),
-                        transitions={'found_beacon': 'found',
+                        transitions={'found_beacon': 'FOLLOW_ARROW',
                                      'timeout': 'not_found'},
                         remapping={'hover_pos' : 'hover_pos',
                                    'max_time' : 'initial_timeout'})
+            self.sm.add('FOLLOW_ARROW', phase_two_states.FollowArrow(),
+                        transitions={'located_beacon': 'found',
+                                     'beacon_loss' : 'not_found',
+                                     'distance_increase': 'not_found'},
+                        remapping={'last_beacon_data': 'beacon_data',
+                                   'last_beacon_pos': 'hover_pos',
+                                   'about_face_pos' : 'hover_pos'})
             
         self.sis = smach_ros.IntrospectionServer('sis_server', self.sm, '/SM_ROOT')
         self.sis.start()
