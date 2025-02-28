@@ -1,0 +1,4 @@
+*.param
+*.tlog
+*.raw
+*.pycache
