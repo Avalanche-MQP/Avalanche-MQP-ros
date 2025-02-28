@@ -42,6 +42,24 @@ class WaitForTakeoff(smach.State):
         rospy.loginfo('@@@@@@ WARNING: OFFBOARD MODE ENGAGED @@@@@@')
         return 'offboard_engaged'
 
+class SimTakeoff(smach.State):
+    '''Takes off; SIMULATION ONLY'''
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['sim_takeoff_complete'],
+                             output_keys=['hover_pos'])
+        self.position_pub = rospy.Publisher('mavros/setpoint_position/local', PoseStamped, queue_size=10)
+        self.spin_rate = rospy.Rate(20)
+
+    def execute(self, ud):
+        start_time = rospy.get_time()
+        target = PoseStamped(rospy.Header(frame_id='map'),
+                             Pose(position=Point(0, 0, 3)))
+        while rospy.get_time() < start_time + 10 and not rospy.is_shutdown():
+            self.position_pub.publish(target)
+            self.spin_rate.sleep()
+        ud.hover_pos = rospy.wait_for_message('mavros/local_position/pose', PoseStamped)
+        return 'sim_takeoff_complete'
+
 class CheckAltitude(smach.State):
     '''Checks altitude to see if it's safe'''
     def __init__(self):

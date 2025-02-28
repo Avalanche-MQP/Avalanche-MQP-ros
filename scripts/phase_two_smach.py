@@ -16,15 +16,19 @@ class PhaseTwoSmach:
         self.sm.userdata.initial_timeout = INITIAL_WAIT_TIME
         with self.sm:
             self.sm.add('WAIT_FOR_TAKEOFF', phase_two_states.WaitForTakeoff(), 
-                   transitions={'offboard_engaged': 'CHECK_ALTITUDE'})
+                   transitions={'offboard_engaged': 'SIM_TAKEOFF'})  # @@@ SIM ONLY @@@
+                    # transitions={'offboard_engaged': 'CHECK_ALTITUDE'})  # @@ REAL DRONE @@
+            self.sm.add('SIM_TAKEOFF', phase_two_states.SimTakeoff(),
+                        transitions={'sim_takeoff_complete': 'CHECK_ALTITUDE'})
             self.sm.add('CHECK_ALTITUDE', phase_two_states.CheckAltitude(),
                    transitions={'safe_altitude': 'WAIT_FOR_BEACON',
                                 'unsafe_altitude': 'not_found'})
+            # TODO: Replace this with snake
             self.sm.add('WAIT_FOR_BEACON', phase_two_states.WaitForBeacon(),
                         transitions={'found_beacon': 'found',
                                      'timeout': 'not_found'},
                         remapping={'hover_pos' : 'hover_pos',
-                                   'timeout' : 'initial_timeout'})
+                                   'max_time' : 'initial_timeout'})
             
         self.sis = smach_ros.IntrospectionServer('sis_server', self.sm, '/SM_ROOT')
         self.sis.start()
