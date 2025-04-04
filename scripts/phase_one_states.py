@@ -8,6 +8,7 @@ from rospy.timer import TimerEvent
 import numpy as np
 from tf.listener import TransformListener
 from tf.transformations import euler_from_quaternion
+import copy
 
 ## Globals
 FORWARD_STEP = 20  # m; how far to move goal forward
@@ -69,9 +70,10 @@ class SimTakeoff(smach.State):
         self.spin_rate = rospy.Rate(20)
 
     def execute(self, ud):
+        curr_pose = rospy.wait_for_message('/mavros/local_position/pose', PoseStamped)
         start_time = rospy.get_time()
         target = PoseStamped(rospy.Header(frame_id='map'),
-                             Pose(position=Point(0, 0, 3)))
+                             Pose(position=Point(0, 0, 3), orientation=curr_pose.pose.orientation))
         while rospy.get_time() < start_time + 10 and not rospy.is_shutdown():
             self.position_pub.publish(target)
             self.spin_rate.sleep()
@@ -96,24 +98,24 @@ class Snake(smach.State):
     '''Handles phase one of the search'''
     def __init__(self):
         smach.State.__init__(self, outcomes=['found', 'not_found'],
-                             input_keys=['start_pose', 'move_dir'],
-                             output_keys=['start_pose', 'move_dir'])
+                             input_keys=['move_dir'],
+                             output_keys=['move_dir'])
         self.pose_pub = rospy.Publisher('/mavros/setpoint_position/local', PoseStamped)
         rospy.Subscriber('/mavros/avalanche_beacon', AvalancheBeacon, self.handle_beacon)
         self.found_beacon = False
         self.t : rospy.Timer = None
+        self.start_pose: PoseStamped = None
 
     def handle_beacon(self, msg: AvalancheBeacon):
         if msg.range != 0 and msg.direction != 0:
             self.found_beacon = True
         
-    def fly_function(self, event: TimerEvent) -> PoseStamped:
+    def fly_function(self, time: float) -> PoseStamped:
         '''Generates a point based on the time and moves the drone accordingly'''
-        time = event.current_real
         delta_x = self.goal_pose.pose.position.x - self.start_pose.pose.position.x
         delta_y = self.goal_pose.pose.position.y - self.start_pose.pose.position.y
 
-        pose_to_send = self.start_pose
+        pose_to_send = copy.deepcopy(self.start_pose)
         if self.move_dir == 'lforward' or self.move_dir == 'rforward':
             pose_to_send.pose.position.x += (time / FORWARD_TIME) * delta_x
             pose_to_send.pose.position.y += (time / FORWARD_TIME) * delta_y
@@ -121,26 +123,44 @@ class Snake(smach.State):
             pose_to_send.pose.position.x += (time / SIDEWAYS_TIME) * delta_x
             pose_to_send.pose.position.y += (time / SIDEWAYS_TIME) * delta_y
 
+        self.pose_pub.publish(pose_to_send)
+
         
     def execute(self, ud):
+        # Initialize start pose if first execution
+        if not self.start_pose:
+            self.start_pose = rospy.wait_for_message('/mavros/local_position/pose', PoseStamped)
+            (r, p, y) = euler_from_quaternion([self.start_pose.pose.orientation.x,
+                                            self.start_pose.pose.orientation.y,
+                                            self.start_pose.pose.orientation.z,
+                                            self.start_pose.pose.orientation.w,])
+            self.initial_heading = y
+
         # Extract userdata
-        self.start_pose: PoseStamped = ud.start_pose
-        self.goal_pose: PoseStamped = ud.start_pose
+        self.goal_pose: PoseStamped = copy.deepcopy(self.start_pose)
         self.move_dir = ud.move_dir
 
         # Increment target position
         if self.move_dir == 'lforward':  # Left side of field; moving forward
-            self.goal_pose.pose.position.x += np.cos(INITIAL_HEADING)
-            self.goal_pose.pose.position.y += np.sin(INITIAL_HEADING)
+            self.goal_pose.pose.position.x += np.cos(self.initial_heading) * FORWARD_STEP
+            self.goal_pose.pose.position.y += np.sin(self.initial_heading) * FORWARD_STEP
         elif self.move_dir == 'rforward':  # Right side of field; moving forward
-            self.goal_pose.pose.position.x += np.cos(INITIAL_HEADING)
-            self.goal_pose.pose.position.y += np.sin(INITIAL_HEADING)
+            self.goal_pose.pose.position.x += np.cos(self.initial_heading) * FORWARD_STEP
+            self.goal_pose.pose.position.y += np.sin(self.initial_heading) * FORWARD_STEP
         elif self.move_dir == 'left':  # Moving left 
-            self.goal_pose.pose.position.x += np.sin(INITIAL_HEADING) 
-            self.goal_pose.pose.position.y -= np.cos(INITIAL_HEADING)
+            self.goal_pose.pose.position.x += np.sin(self.initial_heading) * SIDEWAYS_STEP
+            self.goal_pose.pose.position.y -= np.cos(self.initial_heading) * SIDEWAYS_STEP
         elif self.move_dir == 'right':  # Moving right
-            self.goal_pose.pose.position.x -= np.sin(INITIAL_HEADING) 
-            self.goal_pose.pose.position.y += np.cos(INITIAL_HEADING)
+            self.goal_pose.pose.position.x -= np.sin(self.initial_heading) * SIDEWAYS_STEP
+            self.goal_pose.pose.position.y += np.cos(self.initial_heading) * SIDEWAYS_STEP
+        else:
+            raise ValueError(f'Invalid move_dir: {self.move_dir}')
+
+        # Log
+        rospy.loginfo(f'Initial heading: {self.initial_heading}\n \
+                        start_pose: ({self.start_pose.pose.position.x}, {self.start_pose.pose.position.y})\n \
+                        goal_pose: ({self.goal_pose.pose.position.x}, {self.goal_pose.pose.position.y})\n  \
+                        move_dir: {self.move_dir}')
 
        # Run in loop until reached point or found beacon
         wait = FORWARD_TIME if self.move_dir == 'lforward' or self.move_dir == 'rforward' else SIDEWAYS_TIME
@@ -153,7 +173,8 @@ class Snake(smach.State):
             rate.sleep()
 
         # Update ud vars
-        ud.start_pose = self.goal_pose
+        self.start_pose = self.goal_pose
+        self.goal_pose = None
         if self.move_dir == 'lforward':
             ud.move_dir = 'right'
         elif self.move_dir == 'rforward':
